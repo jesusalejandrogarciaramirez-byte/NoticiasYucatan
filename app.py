@@ -9,7 +9,7 @@ import gc
 import threading
 
 # ----------------------------
-# CONFIG STREAMLIT CLOUD
+# CONFIG STREAMLIT
 # ----------------------------
 
 st.set_page_config(layout="wide", page_title="Noticias Yucatán")
@@ -20,33 +20,33 @@ st.set_option("client.showErrorDetails", False)
 # ----------------------------
 
 KEYWORDS = {
-    "Yucatán": [r"\bYucat[aá]n\b"],
-    "YUC": [r"\bYUC\b"],
-    "yucateco": [r"\byucateco\b"],
-    "Mérida": [r"\bM[eé]rida\b"],
-    "Tren Maya": [r"\bTren Maya\b"],
-    "Gobernador": [r"\bGobernador de Yucat[aá]n\b"],
-    "Huacho Díaz Mena": [
+    "Yucatán":[r"\bYucat[aá]n\b"],
+    "YUC":[r"\bYUC\b"],
+    "yucateco":[r"\byucateco\b"],
+    "Mérida":[r"\bM[eé]rida\b"],
+    "Tren Maya":[r"\bTren Maya\b"],
+    "Gobernador":[r"\bGobernador de Yucat[aá]n\b"],
+    "Huacho Díaz Mena":[
         r"\bJoaqu[ií]n ?Huacho D[ií]az Mena\b",
-        r"\bHuacho D[ií]az Mena\b",
-    ],
+        r"\bHuacho D[ií]az Mena\b"
+    ]
 }
 
 # ----------------------------
 # OCR CON TIMEOUT
 # ----------------------------
 
-
 def ocr_with_timeout(img, timeout=20):
-    result = {"text": ""}
+
+    result={"text":""}
 
     def target():
         try:
-            result["text"] = pytesseract.image_to_string(img)
+            result["text"]=pytesseract.image_to_string(img)
         except:
-            result["text"] = ""
+            result["text"]=""
 
-    thread = threading.Thread(target=target)
+    thread=threading.Thread(target=target)
     thread.start()
     thread.join(timeout)
 
@@ -60,25 +60,25 @@ def ocr_with_timeout(img, timeout=20):
 # MINIATURA
 # ----------------------------
 
-
 def create_thumbnail(page):
-    pix = page.get_pixmap(matrix=fitz.Matrix(0.35, 0.35))
 
-    img = Image.frombytes(
+    pix=page.get_pixmap(matrix=fitz.Matrix(0.35,0.35))
+
+    img=Image.frombytes(
         "RGB",
-        [pix.width, pix.height],
-        pix.samples,
+        [pix.width,pix.height],
+        pix.samples
     )
 
-    img.thumbnail((200, 200))
+    img.thumbnail((200,200))
 
-    buffer = io.BytesIO()
-    img.save(buffer, format="PNG")
+    buffer=io.BytesIO()
+    img.save(buffer,format="PNG")
     buffer.seek(0)
 
-    base64_img = base64.b64encode(buffer.getvalue()).decode()
+    base64_img=base64.b64encode(buffer.getvalue()).decode()
 
-    del pix, img, buffer
+    del pix,img,buffer
     gc.collect()
 
     return base64_img
@@ -88,24 +88,24 @@ def create_thumbnail(page):
 # EXTRAER TEXTO
 # ----------------------------
 
-
 def extract_text(page):
-    text = page.get_text("text")
 
-    if len(text.strip()) > 40:
+    text=page.get_text("text")
+
+    if len(text.strip())>40:
         return text
 
-    pix = page.get_pixmap(matrix=fitz.Matrix(0.5, 0.5), colorspace=fitz.csGRAY)
+    pix=page.get_pixmap(matrix=fitz.Matrix(0.5,0.5),colorspace=fitz.csGRAY)
 
-    img = Image.frombytes(
+    img=Image.frombytes(
         "L",
-        [pix.width, pix.height],
-        pix.samples,
+        [pix.width,pix.height],
+        pix.samples
     )
 
-    text = ocr_with_timeout(img)
+    text=ocr_with_timeout(img)
 
-    del pix, img
+    del pix,img
     gc.collect()
 
     return text
@@ -115,24 +115,27 @@ def extract_text(page):
 # BUSCAR PALABRAS
 # ----------------------------
 
-
 def search_keywords(text):
-    results = []
 
-    for kw, patterns in KEYWORDS.items():
+    results=[]
+
+    for kw,patterns in KEYWORDS.items():
+
         for pattern in patterns:
-            for match in re.finditer(pattern, text, re.IGNORECASE):
-                start = max(match.start() - 60, 0)
-                end = min(match.end() + 60, len(text))
 
-                phrase = text[start:end]
-                phrase = re.sub(r"\s+", " ", phrase)
+            for match in re.finditer(pattern,text,re.IGNORECASE):
 
-                highlighted = re.sub(
+                start=max(match.start()-60,0)
+                end=min(match.end()+60,len(text))
+
+                phrase=text[start:end]
+                phrase=re.sub(r'\s+',' ',phrase)
+
+                highlighted=re.sub(
                     pattern,
                     r"<span style='color:red;font-weight:bold'>\g<0></span>",
                     phrase,
-                    flags=re.IGNORECASE,
+                    flags=re.IGNORECASE
                 )
 
                 results.append(highlighted)
@@ -144,82 +147,70 @@ def search_keywords(text):
 # UI
 # ----------------------------
 
-st.markdown("<h1 style='text-align:center'>Noticias Yucatán</h1>", unsafe_allow_html=True)
-st.markdown(
-    "<h3 style='text-align:center;color:gray'>Análisis automático de PDFs</h3>",
-    unsafe_allow_html=True,
-)
+st.markdown("<h1 style='text-align:center'>Noticias Yucatán</h1>",unsafe_allow_html=True)
+st.markdown("<h3 style='text-align:center;color:gray'>Análisis automático de PDFs</h3>",unsafe_allow_html=True)
 
 st.write("---")
 
-uploaded_files = st.file_uploader(
+uploaded_files=st.file_uploader(
     "Sube tus PDFs",
     type=["pdf"],
-    accept_multiple_files=True,
+    accept_multiple_files=True
 )
 
-summary = {}
+summary={}
 
 # ----------------------------
 # PROCESAMIENTO
 # ----------------------------
 
 if uploaded_files:
+
     for file in uploaded_files:
+
         st.header(file.name)
 
-        summary[file.name] = []
+        summary[file.name]=[]
 
         try:
-            doc = fitz.open(stream=file.read(), filetype="pdf")
+            doc=fitz.open(stream=file.read(),filetype="pdf")
         except:
             st.warning("No se pudo abrir el PDF")
             continue
 
-        total = len(doc)
+        total=len(doc)
 
-        progress = st.progress(0)
+        progress=st.progress(0)
 
-        for i, page in enumerate(doc):
-            progress.progress((i + 1) / total)
+        for i,page in enumerate(doc):
 
-            text = extract_text(page)
+            progress.progress((i+1)/total)
 
-            results = search_keywords(text)
+            text=extract_text(page)
+
+            results=search_keywords(text)
 
             if results:
-                thumb = create_thumbnail(page)
 
-                html = ""
+                thumb=create_thumbnail(page)
 
-                for r in results:
-                    html += r + "<br><br>"
+                image_bytes=base64.b64decode(thumb)
+                image=Image.open(io.BytesIO(image_bytes))
 
-                st.markdown(
-                    f"""
-                <div style="display:flex;
-                            border:1px solid #ccc;
-                            padding:10px;
-                            margin-bottom:15px;
-                            border-radius:6px;
-                            background:#f5f5f5;
-                            color:black">
+                col1,col2=st.columns([1,3])
 
-                    <img src="data:image/png;base64,{thumb}" width="200"
-                    style="margin-right:15px">
+                with col1:
+                    st.image(image,width=200)
 
-                    <div>
-                    <h3>Página {i+1}</h3>
-                    {html}
-                    </div>
+                with col2:
 
-                </div>
-                """,
-                    unsafe_allow_html=True,
-                )
+                    st.markdown(f"### Página {i+1}")
+
+                    for r in results:
+                        st.markdown(r,unsafe_allow_html=True)
 
                 summary[file.name].append(
-                    f"Página {i+1}: " + re.sub("<[^<]+?>", "", results[0])
+                    f"Página {i+1}: "+re.sub('<[^<]+?>','',results[0])
                 )
 
             gc.collect()
@@ -235,21 +226,23 @@ if uploaded_files:
 # RESUMEN FINAL
 # ----------------------------
 
-final = ""
+final=""
 
-for pdf, entries in summary.items():
-    final += pdf + "\n"
+for pdf,entries in summary.items():
+
+    final+=pdf+"\n"
 
     if entries:
-        final += "\n".join(entries)
+        final+="\n".join(entries)
     else:
-        final += "Sin coincidencias"
+        final+="Sin coincidencias"
 
-    final += "\n\n"
+    final+="\n\n"
 
 if final:
+
     st.text_area(
         "Resumen final (copiar)",
         final,
-        height=400,
+        height=400
     )
