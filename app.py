@@ -191,7 +191,7 @@ def search_keywords(text):
 # ----------------------------
 
 st.markdown("<h1 style='text-align:center'>Noticias Yucatán</h1>", unsafe_allow_html=True)
-st.markdown("<h3 style='text-align:center;color:gray'>Análisis automático de PDFs</h3>", unsafe_allow_html=True)
+st.markdown("<h3 style='text-align:center;color:gray'>Análisis automático de PDFs 2.0</h3>", unsafe_allow_html=True)
 
 st.write("---")
 
