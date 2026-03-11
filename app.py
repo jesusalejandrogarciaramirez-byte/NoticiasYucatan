@@ -15,36 +15,48 @@ import threading
 st.set_page_config(layout="wide", page_title="Noticias Yucatán")
 st.set_option("client.showErrorDetails", False)
 
-# Si lo necesitas en Windows, descomenta y ajusta:
+# Si lo necesitas en Windows, descomenta esta línea:
 # pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
+DEBUG_MODE = True
 
 # ----------------------------
 # PALABRAS CLAVE
 # ----------------------------
 
 KEYWORDS = {
-    "Yucatán": [r"\bYucat[aá]n\b"],
-    "YUC": [r"\bYUC\b"],
+    "Yucatán": [
+        r"\bYucat[aá]n\b"
+    ],
+    "YUC": [
+        r"\bYUC\b"
+    ],
     "yucateco": [
         r"\byucateco\b",
         r"\byucateca\b",
         r"\byucatecos\b",
         r"\byucatecas\b"
     ],
-    "Mérida": [r"\bM[eé]rida\b"],
-    "Tren Maya": [r"\bTren\s+Maya\b"],
-    "Gobernador": [r"\bGobernador de Yucat[aá]n\b"],
+    "Mérida": [
+        r"\bM[eé]rida\b"
+    ],
+    "Tren Maya": [
+        r"\bTren\s+Maya\b"
+    ],
+    "Gobernador": [
+        r"\bGobernador\s+de\s+Yucat[aá]n\b"
+    ],
     "Huacho Díaz Mena": [
-        r"\bJoaqu[ií]n\s+Huacho\s+D[ií]az\s+Mena\b",
-        r"\bHuacho\s+D[ií]az\s+Mena\b"
+        r"\bJoaqu[ií]n\s*Huacho\s*D[ií]az\s*Mena\b",
+        r"\bHuacho\s*D[ií]az\s*Mena\b"
     ]
 }
 
 # ----------------------------
-# OCR CON TIMEOUT
+# FUNCIONES AUXILIARES
 # ----------------------------
 
-def normalize_text(text):
+def normalize_text(text: str) -> str:
     if not text:
         return ""
     text = text.replace("\x00", " ")
@@ -54,7 +66,7 @@ def normalize_text(text):
     return text.strip()
 
 
-def preprocess_for_ocr(img):
+def preprocess_for_ocr(img: Image.Image) -> Image.Image:
     gray = ImageOps.grayscale(img)
     gray = ImageOps.autocontrast(gray)
     gray = gray.filter(ImageFilter.SHARPEN)
@@ -62,8 +74,12 @@ def preprocess_for_ocr(img):
     return bw.convert("L")
 
 
+# ----------------------------
+# OCR CON TIMEOUT
+# ----------------------------
+
 def ocr_with_timeout(img, timeout=30):
-    result = {"text": ""}
+    result = {"text": "", "error": None}
 
     def target():
         try:
@@ -72,7 +88,8 @@ def ocr_with_timeout(img, timeout=30):
                 lang="spa",
                 config="--oem 3 --psm 6"
             )
-        except Exception:
+        except Exception as e:
+            result["error"] = str(e)
             result["text"] = ""
 
     thread = threading.Thread(target=target, daemon=True)
@@ -80,9 +97,9 @@ def ocr_with_timeout(img, timeout=30):
     thread.join(timeout)
 
     if thread.is_alive():
-        return ""
+        return "", f"Timeout OCR > {timeout}s"
 
-    return result["text"]
+    return result["text"], result["error"]
 
 
 # ----------------------------
@@ -118,35 +135,86 @@ def create_thumbnail(page):
 # EXTRAER TEXTO
 # ----------------------------
 
-def extract_text(page):
-    text = page.get_text("text")
+def extract_text(page, page_number=None, debug_expander=None):
+    try:
+        text = page.get_text("text")
+    except Exception as e:
+        text = ""
+        if DEBUG_MODE and debug_expander:
+            debug_expander.write(f"Error extrayendo texto embebido: {e}")
+
     text = normalize_text(text)
 
+    if DEBUG_MODE and debug_expander:
+        try:
+            text_dict = page.get_text("dict")
+            blocks = text_dict.get("blocks", [])
+            image_blocks = sum(1 for b in blocks if b.get("type") == 1)
+            text_blocks = sum(1 for b in blocks if b.get("type") == 0)
+
+            debug_expander.write(f"Texto embebido: {len(text)} caracteres")
+            debug_expander.write(
+                f"Bloques totales: {len(blocks)} | "
+                f"bloques texto: {text_blocks} | "
+                f"bloques imagen: {image_blocks}"
+            )
+        except Exception as e:
+            debug_expander.write(f"No se pudo leer page.get_text('dict'): {e}")
+
+    # Si trae suficiente texto embebido, usarlo
     if len(text) > 40:
+        if DEBUG_MODE and debug_expander:
+            debug_expander.write("Se usará texto embebido.")
+            if text:
+                debug_expander.text_area(
+                    f"Preview texto embebido página {page_number}",
+                    text[:2000],
+                    height=220
+                )
         return text
 
-    zoom = 1
-    pix = page.get_pixmap(
-        matrix=fitz.Matrix(zoom, zoom),
-        colorspace=fitz.csGRAY,
-        alpha=False
-    )
+    # Si no, usar OCR simple con escala 1 + preproceso
+    if DEBUG_MODE and debug_expander:
+        debug_expander.write("Se usará OCR.")
 
-    img = Image.frombytes(
-        "L",
-        [pix.width, pix.height],
-        pix.samples
-    )
+    try:
+        zoom = 1
+        pix = page.get_pixmap(
+            matrix=fitz.Matrix(zoom, zoom),
+            colorspace=fitz.csGRAY,
+            alpha=False
+        )
 
-    img = preprocess_for_ocr(img)
+        img = Image.frombytes(
+            "L",
+            [pix.width, pix.height],
+            pix.samples
+        )
 
-    text = ocr_with_timeout(img)
-    text = normalize_text(text)
+        img = preprocess_for_ocr(img)
 
-    del pix, img
-    gc.collect()
+        text_ocr, ocr_error = ocr_with_timeout(img, timeout=30)
+        text_ocr = normalize_text(text_ocr)
 
-    return text
+        if DEBUG_MODE and debug_expander:
+            debug_expander.write(f"OCR caracteres: {len(text_ocr)}")
+            debug_expander.write(f"Error OCR: {ocr_error}")
+            if text_ocr:
+                debug_expander.text_area(
+                    f"Preview OCR página {page_number}",
+                    text_ocr[:2000],
+                    height=220
+                )
+
+        del pix, img
+        gc.collect()
+
+        return text_ocr
+
+    except Exception as e:
+        if DEBUG_MODE and debug_expander:
+            debug_expander.write(f"Fallo OCR en página {page_number}: {e}")
+        return ""
 
 
 # ----------------------------
@@ -191,7 +259,7 @@ def search_keywords(text):
 # ----------------------------
 
 st.markdown("<h1 style='text-align:center'>Noticias Yucatán</h1>", unsafe_allow_html=True)
-st.markdown("<h3 style='text-align:center;color:gray'>Análisis automático de PDFs 2.0</h3>", unsafe_allow_html=True)
+st.markdown("<h3 style='text-align:center;color:gray'>Análisis automático de PDFs</h3>", unsafe_allow_html=True)
 
 st.write("---")
 
@@ -210,7 +278,6 @@ summary = {}
 if uploaded_files:
     for file in uploaded_files:
         st.header(file.name)
-
         summary[file.name] = []
 
         try:
@@ -225,8 +292,15 @@ if uploaded_files:
         for i, page in enumerate(doc):
             progress.progress((i + 1) / total)
 
-            text = extract_text(page)
+            debug_expander = None
+            if DEBUG_MODE:
+                debug_expander = st.expander(f"Diagnóstico página {i+1}", expanded=False)
+
+            text = extract_text(page, page_number=i + 1, debug_expander=debug_expander)
             results = search_keywords(text)
+
+            if DEBUG_MODE and debug_expander:
+                debug_expander.write(f"Coincidencias encontradas: {len(results)}")
 
             if results:
                 thumb = create_thumbnail(page)
