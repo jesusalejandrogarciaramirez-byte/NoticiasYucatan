@@ -36,7 +36,7 @@ KEYWORDS = {
 # OCR CON TIMEOUT
 # ----------------------------
 
-def ocr_with_timeout(img, timeout=20):
+def ocr_with_timeout(img, timeout=30):
 
     result={"text":""}
 
@@ -94,8 +94,8 @@ def extract_text(page):
 
     if len(text.strip())>40:
         return text
-
-    pix=page.get_pixmap(matrix=fitz.Matrix(0.5,0.5),colorspace=fitz.csGRAY)
+    zoom = 1
+    pix=page.get_pixmap(matrix=fitz.Matrix(zoom, zoom)),colorspace=fitz.csGRAY)
 
     img=Image.frombytes(
         "L",
