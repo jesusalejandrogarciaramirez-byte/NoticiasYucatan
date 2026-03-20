@@ -3,11 +3,11 @@ import streamlit.components.v1 as components
 import fitz
 import pytesseract
 from PIL import Image, ImageOps, ImageFilter
-import io
 import re
 import gc
 import hashlib
 import base64
+import os
 
 # ----------------------------
 # CONFIG STREAMLIT
@@ -175,29 +175,18 @@ def bytes_to_data_url(png_bytes: bytes) -> str:
     return f"data:image/png;base64,{b64}"
 
 
-def render_image_actions(png_bytes: bytes, unique_key: str, width_px: int = 220):
+def inferir_periodico_desde_archivo(nombre_archivo: str) -> str:
+    base = os.path.splitext(os.path.basename(nombre_archivo))[0]
+    return base.strip()
+
+
+def render_image_actions(png_bytes: bytes, unique_key: str, width_px: int, file_name: str, page_number: int):
     data_url = bytes_to_data_url(png_bytes)
+    download_name = f"{os.path.splitext(file_name)[0]}_pagina_{page_number}.png"
 
     html = f"""
     <div style="display:flex; flex-direction:column; gap:8px;">
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            <a
-                href="{data_url}"
-                target="_blank"
-                style="
-                    text-decoration:none;
-                    padding:8px 12px;
-                    border:1px solid #CCC;
-                    border-radius:8px;
-                    background:#F8F8F8;
-                    color:#111;
-                    font-size:14px;
-                    display:inline-block;
-                "
-            >
-                Abrir imagen en otra pestaña
-            </a>
-
             <button
                 onclick="copyImage_{unique_key}()"
                 style="
@@ -212,23 +201,38 @@ def render_image_actions(png_bytes: bytes, unique_key: str, width_px: int = 220)
             >
                 Copiar imagen al portapapeles
             </button>
+
+            <a
+                href="{data_url}"
+                download="{download_name}"
+                style="
+                    text-decoration:none;
+                    padding:8px 12px;
+                    border:1px solid #CCC;
+                    border-radius:8px;
+                    background:#F8F8F8;
+                    color:#111;
+                    font-size:14px;
+                    display:inline-block;
+                "
+            >
+                Descargar PNG
+            </a>
         </div>
 
-        <a href="{data_url}" target="_blank" style="text-decoration:none;">
-            <img
-                src="{data_url}"
-                style="
-                    width:{width_px}px;
-                    height:auto;
-                    border:1px solid #DDD;
-                    border-radius:8px;
-                    cursor:pointer;
-                    display:block;
-                "
-            />
-        </a>
+        <img
+            src="{data_url}"
+            style="
+                width:{width_px}px;
+                height:auto;
+                border:1px solid #DDD;
+                border-radius:8px;
+                display:block;
+            "
+        />
 
         <div id="msg_{unique_key}" style="font-size:12px; color:#666;"></div>
+        <div style="font-size:12px; color:#666;">Puedes dar clic derecho en la imagen para guardar manualmente.</div>
     </div>
 
     <script>
@@ -246,12 +250,12 @@ def render_image_actions(png_bytes: bytes, unique_key: str, width_px: int = 220)
 
             msg.innerText = "Imagen copiada al portapapeles.";
         }} catch (err) {{
-            msg.innerText = "No se pudo copiar automáticamente. Ábrela en otra pestaña y cópiala manualmente.";
+            msg.innerText = "No se pudo copiar automáticamente desde este navegador.";
         }}
     }}
     </script>
     """
-    components.html(html, height=width_px + 110)
+    components.html(html, height=width_px + 120)
 
 
 # ----------------------------
@@ -476,6 +480,12 @@ st.markdown("""
     color: #666;
     margin-bottom: 8px;
 }
+.periodico-h5 {
+    margin-top: 0.3rem;
+    margin-bottom: 0.7rem;
+    font-size: 1.05rem;
+    font-weight: 600;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -514,6 +524,7 @@ if uploaded_files:
 
         total = len(doc)
         progress = st.progress(0)
+        periodico = inferir_periodico_desde_archivo(file.name)
 
         for i, page in enumerate(doc):
             page_number = i + 1
@@ -544,7 +555,7 @@ if uploaded_files:
                         f"""
                         <div class="small-preview-card">
                             <div class="small-preview-title">Página {page_number}</div>
-                            <div class="small-preview-meta">Haz clic en la imagen para abrirla en otra pestaña</div>
+                            <div class="small-preview-meta">Copia al portapapeles o guarda la imagen manualmente</div>
                         </div>
                         """,
                         unsafe_allow_html=True
@@ -553,11 +564,14 @@ if uploaded_files:
                     render_image_actions(
                         png_bytes=page_png_bytes,
                         unique_key=unique_key,
-                        width_px=DISPLAY_WIDTH
+                        width_px=DISPLAY_WIDTH,
+                        file_name=file.name,
+                        page_number=page_number
                     )
 
                 with col2:
                     st.markdown(f"### Página {page_number}")
+                    st.markdown(f"<h5 class='periodico-h5'>{periodico}</h5>", unsafe_allow_html=True)
 
                     for r in results:
                         st.markdown(r, unsafe_allow_html=True)
