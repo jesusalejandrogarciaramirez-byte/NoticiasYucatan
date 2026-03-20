@@ -38,10 +38,7 @@ DISPLAY_WIDTH = 220
 
 KEYWORDS = {
     "Yucatán": [
-        r"\bYucat[aá]n\b"
-    ],
-    "YUC": [
-        r"\bYUC\b"
+        r"\bYucat[aá]n\b",r"\bYUC\b"
     ],
     "yucateco": [
         r"\byucateco\b",
@@ -52,11 +49,11 @@ KEYWORDS = {
     "Mérida": [
         r"\bM[eé]rida\b"
     ],
-    "Tren Maya": [
-        r"\bTren\s+Maya\b"
-    ],
     "Gobernador": [
         r"\bGobernador\s+de\s+Yucat[aá]n\b"
+    ],
+    "Puerto Progreso": [
+        r"\bPuerto+\s+Progresp\b"
     ],
     "Huacho Díaz Mena": [
         r"\bJoaqu[ií]n\s*Huacho\s*D[ií]az\s*Mena\b",
