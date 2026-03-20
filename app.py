@@ -19,17 +19,17 @@ st.set_option("client.showErrorDetails", False)
 # Si lo necesitas en Windows, descomenta esta línea:
 # pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
-DEBUG_MODE = True
+DEBUG_MODE = False
 
 # ----------------------------
 # CONFIG OCR / RENDER
 # ----------------------------
 
-OCR_DPI = 200
+OCR_DPI = 150
 OCR_LANG = "spa+eng"
 MIN_CHARS_TEXTO_EMBEDIDO = 40
 
-DISPLAY_DPI = 150
+DISPLAY_DPI = 100
 DISPLAY_WIDTH = 220
 
 # ----------------------------
@@ -51,6 +51,9 @@ KEYWORDS = {
     ],
     "Mérida": [
         r"\bM[eé]rida\b"
+    ],
+    "Tren Maya": [
+        r"\bTren\s+Maya\b"
     ],
     "Gobernador": [
         r"\bGobernador\s+de\s+Yucat[aá]n\b"
@@ -331,14 +334,12 @@ def extract_text(page, page_number=None, debug_expander=None):
             debug_expander.write(f"No se pudo leer page.get_text('dict'): {e}")
 
     if len(texto_original) >= MIN_CHARS_TEXTO_EMBEDIDO:
-        if DEBUG_MODE and debug_expander:
-            debug_expander.write("Se usará texto embebido limpio.")
-            if texto_original:
-                debug_expander.text_area(
-                    f"Preview texto original limpio página {page_number}",
-                    texto_original[:2000],
-                    height=220
-                )
+        if DEBUG_MODE and debug_expander and texto_original:
+            debug_expander.text_area(
+                f"Preview texto original limpio página {page_number}",
+                texto_original[:2000],
+                height=220
+            )
 
         return {
             "text_original": texto_original,
