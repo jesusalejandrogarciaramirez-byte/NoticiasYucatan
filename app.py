@@ -25,7 +25,7 @@ DEBUG_MODE = False
 # CONFIG OCR / RENDER
 # ----------------------------
 
-OCR_DPI = 150
+OCR_DPI = 120
 OCR_LANG = "spa+eng"
 MIN_CHARS_TEXTO_EMBEDIDO = 40
 
