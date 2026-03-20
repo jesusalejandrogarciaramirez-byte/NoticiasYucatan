@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import fitz
 import pytesseract
 from PIL import Image, ImageOps, ImageFilter
@@ -6,10 +7,7 @@ import io
 import re
 import gc
 import hashlib
-
-from docx import Document
-from docx.shared import Inches
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+import base64
 
 # ----------------------------
 # CONFIG STREAMLIT
@@ -31,10 +29,7 @@ OCR_DPI = 200
 OCR_LANG = "spa+eng"
 MIN_CHARS_TEXTO_EMBEDIDO = 40
 
-# Calidad de render para mostrar/guardar página
 DISPLAY_DPI = 150
-
-# Se ve pequeña en pantalla, pero el PNG es de buena calidad
 DISPLAY_WIDTH = 220
 
 # ----------------------------
@@ -67,22 +62,6 @@ KEYWORDS = {
 }
 
 # ----------------------------
-# SESSION STATE
-# ----------------------------
-
-if "selected_pages" not in st.session_state:
-    st.session_state.selected_pages = {}
-
-# Estructura:
-# {
-#   unique_key: {
-#       "file_name": "...",
-#       "page_number": 1,
-#       "png_bytes": b"..."
-#   }
-# }
-
-# ----------------------------
 # FUNCIONES AUXILIARES
 # ----------------------------
 
@@ -93,8 +72,6 @@ def normalize_text(text: str) -> str:
     text = text.replace("\x00", " ")
     text = text.replace("\r", "\n")
     text = text.replace("\t", " ")
-
-    # Normalizar espacios raros, pero aún conservar saltos
     text = re.sub(r"[ \f\v]+", " ", text)
 
     return text.strip()
@@ -105,12 +82,7 @@ def limpiar_texto_para_busqueda(text: str) -> str:
     Limpieza estricta:
     1) une palabras partidas por guión + salto de línea
     2) elimina guiones restantes
-    3) deja solo:
-       - letras
-       - números
-       - espacios
-       - vocales con acento
-       - ñ / Ñ
+    3) deja solo letras, números, espacios, vocales con acento y ñ
     """
     if not text:
         return ""
@@ -118,7 +90,6 @@ def limpiar_texto_para_busqueda(text: str) -> str:
     text = text.replace("\x00", " ")
     text = text.replace("\r", "\n")
 
-    # Repetir hasta que ya no haya uniones pendientes por OCR raro
     prev = None
     while prev != text:
         prev = text
@@ -128,16 +99,9 @@ def limpiar_texto_para_busqueda(text: str) -> str:
             text
         )
 
-    # Convertir saltos de línea a espacio
     text = text.replace("\n", " ")
-
-    # Eliminar guiones restantes completamente
     text = text.replace("-", "")
-
-    # Dejar solo letras, números, espacios, acentos y ñ
     text = re.sub(r"[^0-9A-Za-zÁÉÍÓÚáéíóúÑñ ]+", " ", text)
-
-    # Colapsar espacios
     text = re.sub(r"\s+", " ", text)
 
     return text.strip()
@@ -184,11 +148,6 @@ def preprocess_for_ocr(img: Image.Image) -> Image.Image:
 
 
 def build_normalized_mapping(original_text: str):
-    """
-    Crea el texto normalizado y el mapa de índices
-    para poder buscar en el normalizado y recortar
-    snippets del original.
-    """
     normalized_chars = []
     index_map = []
 
@@ -209,6 +168,90 @@ def build_normalized_mapping(original_text: str):
 def make_unique_page_key(file_name: str, page_number: int) -> str:
     raw = f"{file_name}__{page_number}"
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
+
+
+def bytes_to_data_url(png_bytes: bytes) -> str:
+    b64 = base64.b64encode(png_bytes).decode("utf-8")
+    return f"data:image/png;base64,{b64}"
+
+
+def render_image_actions(png_bytes: bytes, unique_key: str, width_px: int = 220):
+    data_url = bytes_to_data_url(png_bytes)
+
+    html = f"""
+    <div style="display:flex; flex-direction:column; gap:8px;">
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <a
+                href="{data_url}"
+                target="_blank"
+                style="
+                    text-decoration:none;
+                    padding:8px 12px;
+                    border:1px solid #CCC;
+                    border-radius:8px;
+                    background:#F8F8F8;
+                    color:#111;
+                    font-size:14px;
+                    display:inline-block;
+                "
+            >
+                Abrir imagen en otra pestaña
+            </a>
+
+            <button
+                onclick="copyImage_{unique_key}()"
+                style="
+                    padding:8px 12px;
+                    border:1px solid #CCC;
+                    border-radius:8px;
+                    background:#F8F8F8;
+                    color:#111;
+                    font-size:14px;
+                    cursor:pointer;
+                "
+            >
+                Copiar imagen al portapapeles
+            </button>
+        </div>
+
+        <a href="{data_url}" target="_blank" style="text-decoration:none;">
+            <img
+                src="{data_url}"
+                style="
+                    width:{width_px}px;
+                    height:auto;
+                    border:1px solid #DDD;
+                    border-radius:8px;
+                    cursor:pointer;
+                    display:block;
+                "
+            />
+        </a>
+
+        <div id="msg_{unique_key}" style="font-size:12px; color:#666;"></div>
+    </div>
+
+    <script>
+    async function copyImage_{unique_key}() {{
+        const msg = document.getElementById("msg_{unique_key}");
+        try {{
+            const response = await fetch("{data_url}");
+            const blob = await response.blob();
+
+            await navigator.clipboard.write([
+                new ClipboardItem({{
+                    [blob.type]: blob
+                }})
+            ]);
+
+            msg.innerText = "Imagen copiada al portapapeles.";
+        }} catch (err) {{
+            msg.innerText = "No se pudo copiar automáticamente. Ábrela en otra pestaña y cópiala manualmente.";
+        }}
+    }}
+    </script>
+    """
+    components.html(html, height=width_px + 110)
 
 
 # ----------------------------
@@ -241,15 +284,8 @@ def render_page_png_bytes(page, dpi=DISPLAY_DPI) -> bytes:
 # ----------------------------
 
 def extract_text(page, page_number=None, debug_expander=None):
-    """
-    Devuelve:
-    - text_original: limpio para mostrar snippets
-    - text_search: normalizado para búsqueda
-    - source: EMBEDDED / OCR / ERROR
-    """
     texto_raw = ""
 
-    # 1) Intentar texto embebido
     try:
         texto_raw = page.get_text("text") or ""
     except Exception as e:
@@ -257,7 +293,6 @@ def extract_text(page, page_number=None, debug_expander=None):
         if DEBUG_MODE and debug_expander:
             debug_expander.write(f"Error extrayendo texto embebido: {e}")
 
-    # 2) Si es muy poco, intentar bloques
     if len(texto_raw.strip()) < MIN_CHARS_TEXTO_EMBEDIDO:
         try:
             bloques = page.get_text("blocks") or []
@@ -291,7 +326,6 @@ def extract_text(page, page_number=None, debug_expander=None):
         except Exception as e:
             debug_expander.write(f"No se pudo leer page.get_text('dict'): {e}")
 
-    # 3) Si el texto embebido sirve, usarlo
     if len(texto_original) >= MIN_CHARS_TEXTO_EMBEDIDO:
         if DEBUG_MODE and debug_expander:
             debug_expander.write("Se usará texto embebido limpio.")
@@ -308,7 +342,6 @@ def extract_text(page, page_number=None, debug_expander=None):
             "source": "EMBEDDED"
         }
 
-    # 4) Si no, OCR
     if DEBUG_MODE and debug_expander:
         debug_expander.write("Se usará OCR.")
 
@@ -366,10 +399,6 @@ def extract_text(page, page_number=None, debug_expander=None):
 # ----------------------------
 
 def search_keywords(text_original, text_search):
-    """
-    Busca sobre texto normalizado para tolerar acentos,
-    pero recorta el snippet desde el texto original.
-    """
     results = []
     seen = set()
 
@@ -425,47 +454,6 @@ def search_keywords(text_original, text_search):
 
 
 # ----------------------------
-# DOCX
-# ----------------------------
-
-def build_docx_from_selected_pages(selected_pages_dict: dict) -> bytes:
-    doc = Document()
-
-    section = doc.sections[0]
-    section.top_margin = Inches(0.5)
-    section.bottom_margin = Inches(0.5)
-    section.left_margin = Inches(0.5)
-    section.right_margin = Inches(0.5)
-
-    items = sorted(
-        selected_pages_dict.values(),
-        key=lambda x: (x["file_name"].lower(), x["page_number"])
-    )
-
-    for idx, item in enumerate(items):
-        if idx > 0:
-            doc.add_page_break()
-
-        p1 = doc.add_paragraph()
-        p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run1 = p1.add_run(f'{item["file_name"]} - Página {item["page_number"]}')
-        run1.bold = True
-
-        doc.add_paragraph("")
-
-        img_stream = io.BytesIO(item["png_bytes"])
-        p2 = doc.add_paragraph()
-        p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run2 = p2.add_run()
-        run2.add_picture(img_stream, width=Inches(7.2))
-
-    out = io.BytesIO()
-    doc.save(out)
-    out.seek(0)
-    return out.getvalue()
-
-
-# ----------------------------
 # UI CSS
 # ----------------------------
 
@@ -505,26 +493,6 @@ uploaded_files = st.file_uploader(
     type=["pdf"],
     accept_multiple_files=True
 )
-
-top_col1, top_col2 = st.columns([2, 1])
-
-with top_col1:
-    st.write(f"Páginas seleccionadas para DOCX: **{len(st.session_state.selected_pages)}**")
-
-with top_col2:
-    if st.session_state.selected_pages:
-        docx_bytes = build_docx_from_selected_pages(st.session_state.selected_pages)
-        st.download_button(
-            label="Descargar DOCX de páginas seleccionadas",
-            data=docx_bytes,
-            file_name="paginas_seleccionadas_yucatan.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            use_container_width=True
-        )
-
-if st.button("Limpiar páginas seleccionadas"):
-    st.session_state.selected_pages = {}
-    st.rerun()
 
 summary = {}
 
@@ -568,7 +536,6 @@ if uploaded_files:
             if results:
                 page_png_bytes = render_page_png_bytes(page, dpi=DISPLAY_DPI)
                 unique_key = make_unique_page_key(file.name, page_number)
-                already_selected = unique_key in st.session_state.selected_pages
 
                 col1, col2 = st.columns([1, 3])
 
@@ -577,38 +544,16 @@ if uploaded_files:
                         f"""
                         <div class="small-preview-card">
                             <div class="small-preview-title">Página {page_number}</div>
-                            <div class="small-preview-meta">Vista en alta calidad reducida visualmente</div>
+                            <div class="small-preview-meta">Haz clic en la imagen para abrirla en otra pestaña</div>
                         </div>
                         """,
                         unsafe_allow_html=True
                     )
 
-                    btn_label = "Agregada al DOCX" if already_selected else "Agregar página al DOCX"
-                    if st.button(
-                        btn_label,
-                        key=f"add_docx_{unique_key}",
-                        use_container_width=True,
-                        disabled=already_selected
-                    ):
-                        st.session_state.selected_pages[unique_key] = {
-                            "file_name": file.name,
-                            "page_number": page_number,
-                            "png_bytes": page_png_bytes
-                        }
-                        st.rerun()
-
-                    st.download_button(
-                        label="Descargar página PNG",
-                        data=page_png_bytes,
-                        file_name=f"{file.name}_pagina_{page_number}.png",
-                        mime="image/png",
-                        key=f"download_png_{unique_key}",
-                        use_container_width=True
-                    )
-
-                    st.image(
-                        page_png_bytes,
-                        width=DISPLAY_WIDTH
+                    render_image_actions(
+                        png_bytes=page_png_bytes,
+                        unique_key=unique_key,
+                        width_px=DISPLAY_WIDTH
                     )
 
                 with col2:
