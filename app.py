@@ -29,7 +29,7 @@ OCR_DPI = 120
 OCR_LANG = "spa+eng"
 MIN_CHARS_TEXTO_EMBEDIDO = 40
 
-DISPLAY_DPI = 100
+DISPLAY_DPI = 90
 DISPLAY_WIDTH = 220
 
 # ----------------------------
