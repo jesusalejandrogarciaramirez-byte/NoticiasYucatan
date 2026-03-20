@@ -4,8 +4,12 @@ import pytesseract
 from PIL import Image, ImageOps, ImageFilter
 import io
 import re
-import base64
 import gc
+import hashlib
+
+from docx import Document
+from docx.shared import Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 # ----------------------------
 # CONFIG STREAMLIT
@@ -20,12 +24,18 @@ st.set_option("client.showErrorDetails", False)
 DEBUG_MODE = True
 
 # ----------------------------
-# CONFIG OCR
+# CONFIG OCR / RENDER
 # ----------------------------
 
 OCR_DPI = 200
 OCR_LANG = "spa+eng"
 MIN_CHARS_TEXTO_EMBEDIDO = 40
+
+# Calidad de render para mostrar/guardar página
+DISPLAY_DPI = 150
+
+# Se ve pequeña en pantalla, pero el PNG es de buena calidad
+DISPLAY_WIDTH = 220
 
 # ----------------------------
 # PALABRAS CLAVE
@@ -47,9 +57,6 @@ KEYWORDS = {
     "Mérida": [
         r"\bM[eé]rida\b"
     ],
-    "Tren Maya": [
-        r"\bTren\s+Maya\b"
-    ],
     "Gobernador": [
         r"\bGobernador\s+de\s+Yucat[aá]n\b"
     ],
@@ -60,57 +67,78 @@ KEYWORDS = {
 }
 
 # ----------------------------
+# SESSION STATE
+# ----------------------------
+
+if "selected_pages" not in st.session_state:
+    st.session_state.selected_pages = {}
+
+# Estructura:
+# {
+#   unique_key: {
+#       "file_name": "...",
+#       "page_number": 1,
+#       "png_bytes": b"..."
+#   }
+# }
+
+# ----------------------------
 # FUNCIONES AUXILIARES
 # ----------------------------
 
 def normalize_text(text: str) -> str:
     if not text:
         return ""
+
     text = text.replace("\x00", " ")
-    text = text.replace("\r", " ")
-    text = text.replace("\n", " ")
-    text = re.sub(r"\s+", " ", text)
+    text = text.replace("\r", "\n")
+    text = text.replace("\t", " ")
+
+    # Normalizar espacios raros, pero aún conservar saltos
+    text = re.sub(r"[ \f\v]+", " ", text)
+
     return text.strip()
 
 
 def limpiar_texto_para_busqueda(text: str) -> str:
     """
-    Limpieza pensada para búsqueda:
-    - une palabras partidas por salto de línea
-    - elimina basura típica de OCR
-    - conserva letras, números, acentos, ü y ñ
+    Limpieza estricta:
+    1) une palabras partidas por guión + salto de línea
+    2) elimina guiones restantes
+    3) deja solo:
+       - letras
+       - números
+       - espacios
+       - vocales con acento
+       - ñ / Ñ
     """
     if not text:
         return ""
 
     text = text.replace("\x00", " ")
-    text = text.replace("-\n", "")
     text = text.replace("\r", "\n")
+
+    # Repetir hasta que ya no haya uniones pendientes por OCR raro
+    prev = None
+    while prev != text:
+        prev = text
+        text = re.sub(
+            r"([A-Za-zÁÉÍÓÚáéíóúÑñ])\-\s*\n\s*([A-Za-zÁÉÍÓÚáéíóúÑñ])",
+            r"\1\2",
+            text
+        )
+
+    # Convertir saltos de línea a espacio
     text = text.replace("\n", " ")
-    text = text.replace("-", " ")
 
-    replacements = {
-        "“": '"',
-        "”": '"',
-        "‘": "'",
-        "’": "'",
-        "´": "'",
-        "`": "'",
-        "•": " ",
-        "·": " ",
-        "…": " ",
-        "|": " ",
-        "¦": " ",
-        "_": " ",
-        "/": " ",
-        "\\": " ",
-    }
+    # Eliminar guiones restantes completamente
+    text = text.replace("-", "")
 
-    for old, new in replacements.items():
-        text = text.replace(old, new)
+    # Dejar solo letras, números, espacios, acentos y ñ
+    text = re.sub(r"[^0-9A-Za-zÁÉÍÓÚáéíóúÑñ ]+", " ", text)
 
-    text = re.sub(r"[^0-9A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+", " ", text)
-    text = re.sub(r"\s{2,}", " ", text)
+    # Colapsar espacios
+    text = re.sub(r"\s+", " ", text)
 
     return text.strip()
 
@@ -118,9 +146,9 @@ def limpiar_texto_para_busqueda(text: str) -> str:
 def normalizar_para_busqueda(text: str) -> str:
     """
     Normaliza solo para búsqueda interna:
-    - pasa a minúsculas
+    - minúsculas
     - quita acentos
-    - conserva la ñ
+    - conserva ñ
     """
     if not text:
         return ""
@@ -133,7 +161,11 @@ def normalizar_para_busqueda(text: str) -> str:
         "í": "i",
         "ó": "o",
         "ú": "u",
-        "ü": "u",
+        "Á": "a",
+        "É": "e",
+        "Í": "i",
+        "Ó": "o",
+        "Ú": "u",
     }
 
     for a, b in reemplazos.items():
@@ -147,28 +179,22 @@ def preprocess_for_ocr(img: Image.Image) -> Image.Image:
     gray = ImageOps.grayscale(img)
     gray = ImageOps.autocontrast(gray)
     gray = gray.filter(ImageFilter.SHARPEN)
-
-    # Binarización suave para mejorar OCR
     bw = gray.point(lambda x: 0 if x < 180 else 255, "1")
     return bw.convert("L")
 
 
 def build_normalized_mapping(original_text: str):
     """
-    Crea:
-    - normalized_text: versión sin acentos (excepto ñ)
-    - index_map: por cada carácter de normalized_text, guarda el índice
-      correspondiente en original_text.
-
-    Esto permite buscar sobre texto normalizado y luego recortar
-    el snippet desde el texto original.
+    Crea el texto normalizado y el mapa de índices
+    para poder buscar en el normalizado y recortar
+    snippets del original.
     """
     normalized_chars = []
     index_map = []
 
     replacements = {
-        "á": "a", "é": "e", "í": "i", "ó": "o", "ú": "u", "ü": "u",
-        "Á": "a", "É": "e", "Í": "i", "Ó": "o", "Ú": "u", "Ü": "u",
+        "á": "a", "é": "e", "í": "i", "ó": "o", "ú": "u",
+        "Á": "a", "É": "e", "Í": "i", "Ó": "o", "Ú": "u",
     }
 
     for idx, ch in enumerate(original_text):
@@ -178,6 +204,11 @@ def build_normalized_mapping(original_text: str):
         index_map.append(idx)
 
     return "".join(normalized_chars), index_map
+
+
+def make_unique_page_key(file_name: str, page_number: int) -> str:
+    raw = f"{file_name}__{page_number}"
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
 
 # ----------------------------
@@ -197,32 +228,12 @@ def hacer_ocr(img):
 
 
 # ----------------------------
-# MINIATURA
+# RENDER DE PÁGINA
 # ----------------------------
 
-def create_thumbnail(page):
-    pix = page.get_pixmap(matrix=fitz.Matrix(0.35, 0.35), alpha=False)
-
-    mode = "RGB" if pix.n < 4 else "RGBA"
-
-    img = Image.frombytes(
-        mode,
-        [pix.width, pix.height],
-        pix.samples
-    )
-
-    img.thumbnail((200, 200))
-
-    buffer = io.BytesIO()
-    img.save(buffer, format="PNG")
-    buffer.seek(0)
-
-    base64_img = base64.b64encode(buffer.getvalue()).decode()
-
-    del pix, img, buffer
-    gc.collect()
-
-    return base64_img
+def render_page_png_bytes(page, dpi=DISPLAY_DPI) -> bytes:
+    pix = page.get_pixmap(dpi=dpi, alpha=False)
+    return pix.tobytes("png")
 
 
 # ----------------------------
@@ -231,10 +242,10 @@ def create_thumbnail(page):
 
 def extract_text(page, page_number=None, debug_expander=None):
     """
-    Devuelve un dict con:
-    - text_original: texto limpio para mostrar snippets
-    - text_search: texto normalizado para búsqueda interna
-    - source: EMBEDDED / OCR
+    Devuelve:
+    - text_original: limpio para mostrar snippets
+    - text_search: normalizado para búsqueda
+    - source: EMBEDDED / OCR / ERROR
     """
     texto_raw = ""
 
@@ -246,7 +257,7 @@ def extract_text(page, page_number=None, debug_expander=None):
         if DEBUG_MODE and debug_expander:
             debug_expander.write(f"Error extrayendo texto embebido: {e}")
 
-    # 2) Si es poco, intentar bloques
+    # 2) Si es muy poco, intentar bloques
     if len(texto_raw.strip()) < MIN_CHARS_TEXTO_EMBEDIDO:
         try:
             bloques = page.get_text("blocks") or []
@@ -280,7 +291,7 @@ def extract_text(page, page_number=None, debug_expander=None):
         except Exception as e:
             debug_expander.write(f"No se pudo leer page.get_text('dict'): {e}")
 
-    # 3) Si trae suficiente texto embebido, usarlo
+    # 3) Si el texto embebido sirve, usarlo
     if len(texto_original) >= MIN_CHARS_TEXTO_EMBEDIDO:
         if DEBUG_MODE and debug_expander:
             debug_expander.write("Se usará texto embebido limpio.")
@@ -290,13 +301,14 @@ def extract_text(page, page_number=None, debug_expander=None):
                     texto_original[:2000],
                     height=220
                 )
+
         return {
             "text_original": texto_original,
             "text_search": texto_busqueda,
             "source": "EMBEDDED"
         }
 
-    # 4) Si no, usar OCR
+    # 4) Si no, OCR
     if DEBUG_MODE and debug_expander:
         debug_expander.write("Se usará OCR.")
 
@@ -341,6 +353,7 @@ def extract_text(page, page_number=None, debug_expander=None):
     except Exception as e:
         if DEBUG_MODE and debug_expander:
             debug_expander.write(f"Fallo OCR en página {page_number}: {e}")
+
         return {
             "text_original": "",
             "text_search": "",
@@ -355,7 +368,7 @@ def extract_text(page, page_number=None, debug_expander=None):
 def search_keywords(text_original, text_search):
     """
     Busca sobre texto normalizado para tolerar acentos,
-    pero recorta y muestra el snippet desde el texto original.
+    pero recorta el snippet desde el texto original.
     """
     results = []
     seen = set()
@@ -367,10 +380,8 @@ def search_keywords(text_original, text_search):
 
     for kw, patterns in KEYWORDS.items():
         for pattern in patterns:
-            # Normalizar patrón para búsqueda interna
             pattern_norm = normalizar_para_busqueda(pattern)
 
-            # Ajustes básicos del patrón tras normalizar
             pattern_norm = pattern_norm.replace(r"[aá]", r"[aa]")
             pattern_norm = pattern_norm.replace(r"[eé]", r"[ee]")
             pattern_norm = pattern_norm.replace(r"[ií]", r"[ii]")
@@ -397,7 +408,6 @@ def search_keywords(text_original, text_search):
                     continue
                 seen.add(phrase_key)
 
-                # Resaltar en el snippet visible usando el patrón original
                 highlighted = phrase
                 try:
                     highlighted = re.sub(
@@ -415,6 +425,73 @@ def search_keywords(text_original, text_search):
 
 
 # ----------------------------
+# DOCX
+# ----------------------------
+
+def build_docx_from_selected_pages(selected_pages_dict: dict) -> bytes:
+    doc = Document()
+
+    section = doc.sections[0]
+    section.top_margin = Inches(0.5)
+    section.bottom_margin = Inches(0.5)
+    section.left_margin = Inches(0.5)
+    section.right_margin = Inches(0.5)
+
+    items = sorted(
+        selected_pages_dict.values(),
+        key=lambda x: (x["file_name"].lower(), x["page_number"])
+    )
+
+    for idx, item in enumerate(items):
+        if idx > 0:
+            doc.add_page_break()
+
+        p1 = doc.add_paragraph()
+        p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run1 = p1.add_run(f'{item["file_name"]} - Página {item["page_number"]}')
+        run1.bold = True
+
+        doc.add_paragraph("")
+
+        img_stream = io.BytesIO(item["png_bytes"])
+        p2 = doc.add_paragraph()
+        p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run2 = p2.add_run()
+        run2.add_picture(img_stream, width=Inches(7.2))
+
+    out = io.BytesIO()
+    doc.save(out)
+    out.seek(0)
+    return out.getvalue()
+
+
+# ----------------------------
+# UI CSS
+# ----------------------------
+
+st.markdown("""
+<style>
+.small-preview-card {
+    border: 1px solid #DDD;
+    border-radius: 10px;
+    padding: 10px;
+    margin-bottom: 14px;
+    background: #FFF;
+}
+.small-preview-title {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 8px;
+}
+.small-preview-meta {
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 8px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ----------------------------
 # UI
 # ----------------------------
 
@@ -429,6 +506,26 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True
 )
 
+top_col1, top_col2 = st.columns([2, 1])
+
+with top_col1:
+    st.write(f"Páginas seleccionadas para DOCX: **{len(st.session_state.selected_pages)}**")
+
+with top_col2:
+    if st.session_state.selected_pages:
+        docx_bytes = build_docx_from_selected_pages(st.session_state.selected_pages)
+        st.download_button(
+            label="Descargar DOCX de páginas seleccionadas",
+            data=docx_bytes,
+            file_name="paginas_seleccionadas_yucatan.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True
+        )
+
+if st.button("Limpiar páginas seleccionadas"):
+    st.session_state.selected_pages = {}
+    st.rerun()
+
 summary = {}
 
 # ----------------------------
@@ -441,7 +538,8 @@ if uploaded_files:
         summary[file.name] = []
 
         try:
-            doc = fitz.open(stream=file.read(), filetype="pdf")
+            pdf_bytes = file.read()
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         except Exception:
             st.warning("No se pudo abrir el PDF")
             continue
@@ -450,13 +548,14 @@ if uploaded_files:
         progress = st.progress(0)
 
         for i, page in enumerate(doc):
+            page_number = i + 1
             progress.progress((i + 1) / total)
 
             debug_expander = None
             if DEBUG_MODE:
-                debug_expander = st.expander(f"Diagnóstico página {i+1}", expanded=False)
+                debug_expander = st.expander(f"Diagnóstico página {page_number}", expanded=False)
 
-            extracted = extract_text(page, page_number=i + 1, debug_expander=debug_expander)
+            extracted = extract_text(page, page_number=page_number, debug_expander=debug_expander)
             text_original = extracted["text_original"]
             text_search = extracted["text_search"]
 
@@ -467,24 +566,61 @@ if uploaded_files:
                 debug_expander.write(f"Coincidencias encontradas: {len(results)}")
 
             if results:
-                thumb = create_thumbnail(page)
-
-                image_bytes = base64.b64decode(thumb)
-                image = Image.open(io.BytesIO(image_bytes))
+                page_png_bytes = render_page_png_bytes(page, dpi=DISPLAY_DPI)
+                unique_key = make_unique_page_key(file.name, page_number)
+                already_selected = unique_key in st.session_state.selected_pages
 
                 col1, col2 = st.columns([1, 3])
 
                 with col1:
-                    st.image(image, width=200)
+                    st.markdown(
+                        f"""
+                        <div class="small-preview-card">
+                            <div class="small-preview-title">Página {page_number}</div>
+                            <div class="small-preview-meta">Vista en alta calidad reducida visualmente</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+
+                    btn_label = "Agregada al DOCX" if already_selected else "Agregar página al DOCX"
+                    if st.button(
+                        btn_label,
+                        key=f"add_docx_{unique_key}",
+                        use_container_width=True,
+                        disabled=already_selected
+                    ):
+                        st.session_state.selected_pages[unique_key] = {
+                            "file_name": file.name,
+                            "page_number": page_number,
+                            "png_bytes": page_png_bytes
+                        }
+                        st.rerun()
+
+                    st.download_button(
+                        label="Descargar página PNG",
+                        data=page_png_bytes,
+                        file_name=f"{file.name}_pagina_{page_number}.png",
+                        mime="image/png",
+                        key=f"download_png_{unique_key}",
+                        use_container_width=True
+                    )
+
+                    st.image(
+                        page_png_bytes,
+                        width=DISPLAY_WIDTH
+                    )
 
                 with col2:
-                    st.markdown(f"### Página {i+1}")
+                    st.markdown(f"### Página {page_number}")
 
                     for r in results:
                         st.markdown(r, unsafe_allow_html=True)
 
+                    st.caption(f"Fuente de texto usada: {extracted['source']}")
+
                 summary[file.name].append(
-                    f"Página {i+1}: " + re.sub("<[^<]+?>", "", results[0])
+                    f"Página {page_number}: " + re.sub("<[^<]+?>", "", results[0])
                 )
 
             gc.collect()
